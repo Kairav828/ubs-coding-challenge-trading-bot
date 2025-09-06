@@ -1,23 +1,33 @@
 import logging
 import socket
+import os
 from flask import Flask, request, jsonify
 import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import statistics
 
-# Download VADER lexicon for sentiment analysis
-nltk.download('vader_lexicon', quiet=True)
-sia = SentimentIntensityAnalyzer()
-
 app = Flask(__name__)  # Define app here since it's not imported
 
 logger = logging.getLogger(__name__)
 
+# Global for SIA (initialized lazily)
+sia = None
+
+@app.before_first_request
+def load_nltk():
+    global sia
+    if sia is None:
+        nltk.download('vader_lexicon', quiet=True)
+        sia = SentimentIntensityAnalyzer()
+
 @app.route('/', methods=['GET'])
 def default_route():
-    return 'Python Template'
+    return 'Python Template'  # Simple health check
 
 def analyze_sentiment(title):
+    global sia
+    if sia is None:
+        load_nltk()  # Ensure loaded
     """Advanced sentiment analysis with crypto-specific keywords."""
     score = sia.polarity_scores(title)['compound']
     
@@ -172,4 +182,5 @@ logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=8000, debug=True)
+    port = int(os.environ.get('PORT', 8000))
+    app.run(host='0.0.0.0', port=port, debug=False)  # Debug off for production
