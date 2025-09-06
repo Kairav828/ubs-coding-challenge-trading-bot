@@ -58,42 +58,22 @@ def calculate_trend_strength(candles):
     
     return net_change, avg_change
 
-def calculate_volatility(candles):
-    """Calculate volatility as average high-low range."""
-    if not candles:
-        return 0.0
-    ranges = [(c['high'] - c['low']) / c['open'] for c in candles if c['open'] != 0]
-    return statistics.mean(ranges) if ranges else 0.0
-
 def detect_patterns(candles):
-    """Detect additional candlestick patterns for better signals."""
+    """Simplified pattern detection for speed."""
     if len(candles) < 2:
         return "NEUTRAL", 0.0
     
     last = candles[-1]
     prev = candles[-2]
     
-    # Bullish patterns
+    # Bullish engulfing
     if last['close'] > last['open'] and last['open'] < prev['close'] and last['close'] > prev['open']:
-        pattern = "BULLISH_ENGULFING"
-        strength = (last['close'] - last['open']) / last['open']
-    # Bearish patterns
+        return "BULLISH_ENGULFING", (last['close'] - last['open']) / last['open']
+    # Bearish engulfing
     elif last['close'] < last['open'] and last['open'] > prev['close'] and last['close'] < prev['open']:
-        pattern = "BEARISH_ENGULFING"
-        strength = (last['open'] - last['close']) / last['open']
-    # Hammer (bullish reversal)
-    elif last['close'] > last['open'] and (last['high'] - last['close']) < (last['close'] - last['open']) and (last['open'] - last['low']) > 2 * (last['close'] - last['open']):
-        pattern = "HAMMER"
-        strength = (last['open'] - last['low']) / last['open']
-    # Shooting star (bearish reversal)
-    elif last['close'] < last['open'] and (last['close'] - last['low']) < (last['open'] - last['close']) and (last['high'] - last['open']) > 2 * (last['open'] - last['close']):
-        pattern = "SHOOTING_STAR"
-        strength = (last['high'] - last['open']) / last['open']
+        return "BEARISH_ENGULFING", (last['open'] - last['close']) / last['open']
     else:
-        pattern = "NEUTRAL"
-        strength = 0.0
-    
-    return pattern, strength
+        return "NEUTRAL", 0.0
 
 def detect_reversal(observation_candles):
     """Detect potential reversal (e.g., pump then dump)."""
@@ -144,9 +124,9 @@ def predict_decision(event):
     score += sentiment_val * sent_score * 3
     score += prev_avg * 5
     # Boost/Dampen for patterns
-    if pattern in ["BULLISH_ENGULFING", "HAMMER"]:
+    if pattern in ["BULLISH_ENGULFING"]:
         score += pattern_strength * 5
-    elif pattern in ["BEARISH_ENGULFING", "SHOOTING_STAR"]:
+    elif pattern in ["BEARISH_ENGULFING"]:
         score -= pattern_strength * 5
 
     # Reversal penalize if sentiment positive but price dropping
