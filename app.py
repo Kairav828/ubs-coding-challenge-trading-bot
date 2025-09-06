@@ -110,45 +110,52 @@ def detect_reversal(observation_candles):
     return False, 0.0
 
 def predict_decision(event):
-    """Ensemble-like weighted scoring for improved prediction."""
     sentiment, sent_score = analyze_sentiment(event['title'])
-    prev_candles = event.get('previous_candles', [])
     obs_candles = event.get('observation_candles', [])
+    prev_candles = event.get('previous_candles', [])
     
-    if not obs_candles:
-        return "SHORT", 0.0
+    if len(obs_candles) < 2:
+        # Not enough data, default predict SHORT
+        return "SHORT", 0
 
-    # Trends
-    net_change, avg_change = calculate_trend_strength(obs_candles)
+    # Entry price is the close of first observation candle
+    entry_price = obs_candles[0]['close']
+    exit_price_estimate = obs_candles[-1]['close'] # crude estimate using last candle close
+
+    price_change_relative = (exit_price_estimate - entry_price) / entry_price if entry_price != 0 else 0
+
+    # Sentiment contribution (positive push price up, negative down)
+    sentiment_val = 0
+    if sentiment == "POSITIVE":
+        sentiment_val = 1
+    elif sentiment == "NEGATIVE":
+        sentiment_val = -1
+
+    # Previous candle trend average change
     prev_net, prev_avg = calculate_trend_strength(prev_candles)
 
-    # Patterns
+    # Patterns in observation
     pattern, pattern_strength = detect_patterns(obs_candles)
 
-    # Volatility
-    vol = calculate_volatility(prev_candles + obs_candles)
+    # Weight components
+    score = 0
 
-    # Reversal
+    score += price_change_relative * 10  # Strongest signal: expected price movement from observation candles
+    score += sentiment_val * sent_score * 3
+    score += prev_avg * 5
+    # Boost/Dampen for patterns
+    if pattern in ["BULLISH_ENGULFING", "HAMMER"]:
+        score += pattern_strength * 5
+    elif pattern in ["BEARISH_ENGULFING", "SHOOTING_STAR"]:
+        score -= pattern_strength * 5
+
+    # Reversal penalize if sentiment positive but price dropping
     is_rev, rev_strength = detect_reversal(obs_candles)
-
-    # Base score components
-    score_sentiment = sent_score * (3 if sentiment == "POSITIVE" else -3 if sentiment == "NEGATIVE" else 0)
-    score_trend = (net_change / obs_candles[0]['open']) * 15 if obs_candles[0]['open'] != 0 else 0
-    score_prev_trend = prev_avg * 5
-    score_pattern = pattern_strength * (6 if pattern in ["BULLISH_ENGULFING", "HAMMER"] else -6 if pattern in ["BEARISH_ENGULFING", "SHOOTING_STAR"] else 0)
-    score_rev = -((2 + rev_strength * 5) if is_rev and sentiment == "POSITIVE" else 0)
-
-    # Compose weighted score
-    score = score_sentiment + score_trend + score_prev_trend + score_pattern + score_rev
-
-    # Volatility adjustment, large vol means more confidence
-    confidence = abs(score) + vol * 10 + sum(c['volume'] for c in obs_candles) / 100
-
-    # Clip score to avoid extreme values
-    score = max(min(score, 10), -10)
+    if is_rev and sentiment == "POSITIVE":
+        score -= (2 + rev_strength * 5)
 
     decision = "LONG" if score > 0 else "SHORT"
-    
+    confidence = abs(score) + sum(c['volume'] for c in obs_candles) / 100
     return decision, confidence
 
 @app.route('/trading-bot', methods=['POST'])
