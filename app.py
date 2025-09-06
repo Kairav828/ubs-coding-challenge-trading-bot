@@ -3,7 +3,6 @@ import socket
 from flask import Flask, request, jsonify
 import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
-import random  
 import statistics
 
 # Download VADER lexicon for sentiment analysis
@@ -19,92 +18,108 @@ def default_route():
     return 'Python Template'
 
 def analyze_sentiment(title):
-    """Enhanced sentiment analysis with crypto-specific adjustments."""
+    """Advanced sentiment analysis with crypto-specific keywords."""
     score = sia.polarity_scores(title)['compound']
     
-    # Crypto-specific keywords for sentiment boost
-    positive_keywords = ['adoption', 'reserve', 'bullish', 'partnership', 'upgrade', 'halving', 'etf', 'approval']
-    negative_keywords = ['hack', 'ban', 'crash', 'scam', 'regulation', 'selloff', 'bearish', 'dump']
+    # Expanded crypto-specific keywords
+    positive_keywords = ['adoption', 'reserve', 'bullish', 'partnership', 'upgrade', 'halving', 'etf', 'approval', 'buy', 'surge', 'rally', 'trump', 'strategic', 'establish']
+    negative_keywords = ['hack', 'ban', 'crash', 'scam', 'regulation', 'selloff', 'bearish', 'dump', 'fraud', 'collapse', 'warning']
     
     title_lower = title.lower()
-    keyword_boost = sum(0.15 for word in positive_keywords if word in title_lower) - \
-                    sum(0.15 for word in negative_keywords if word in title_lower)
+    keyword_boost = sum(0.2 for word in positive_keywords if word in title_lower) - \
+                    sum(0.2 for word in negative_keywords if word in title_lower)
     
     score += keyword_boost
     
-    if score > 0.05:
+    if score > 0.1:
         return "POSITIVE", abs(score)
-    elif score < -0.05:
+    elif score < -0.1:
         return "NEGATIVE", abs(score)
-    return "NEUTRAL", 0
+    return "NEUTRAL", 0.0
 
-def calculate_momentum(candles):
-    """Calculate simple momentum: average percentage change."""
+def calculate_trend_strength(candles):
+    """Calculate trend strength: net change and average change."""
     if not candles:
-        return 0
-    changes = [(c['close'] - c['open']) / c['open'] for c in candles if c['open'] != 0]
-    return statistics.mean(changes) if changes else 0
-
-def calculate_volatility(candles):
-    """Calculate volatility as average high-low range."""
-    if not candles:
-        return 0
-    ranges = [(c['high'] - c['low']) / c['open'] for c in candles if c['open'] != 0]
-    return statistics.mean(ranges) if ranges else 0
-
-def detect_reversal(observation_candles):
-    """Detect potential reversal (e.g., pump then dump)."""
-    if len(observation_candles) < 2:
-        return False, 0
+        return 0.0, 0.0
     
-    net_change = observation_candles[-1]['close'] - observation_candles[0]['open']
-    max_high = max(c['high'] for c in observation_candles)
-    reversal_strength = (max_high - observation_candles[-1]['close']) / max_high if max_high != 0 else 0
-    
-    # Reversal if initial up but ends lower
-    if observation_candles[0]['close'] > observation_candles[0]['open'] and net_change < 0:
-        return True, reversal_strength
-    return False, 0
-
-def simple_price_forecast(observation_candles):
-    """Simple linear extrapolation for next 30 min direction."""
-    if len(observation_candles) < 2:
-        return 0
-    
-    # Use last few changes to predict direction
-    changes = [c['close'] - prev['close'] for prev, c in zip(observation_candles[:-1], observation_candles[1:])]
+    net_change = candles[-1]['close'] - candles[0]['open']
+    changes = [(c['close'] - c['open']) for c in candles]
     avg_change = statistics.mean(changes)
     
-    # Forecast direction: positive avg change suggests up
-    return avg_change / abs(avg_change) if avg_change != 0 else 0
+    return net_change, avg_change
+
+def detect_patterns(candles):
+    """Detect additional candlestick patterns for better signals."""
+    if len(candles) < 2:
+        return "NEUTRAL", 0.0
+    
+    last = candles[-1]
+    prev = candles[-2]
+    
+    # Bullish patterns
+    if last['close'] > last['open'] and last['open'] < prev['close'] and last['close'] > prev['open']:
+        pattern = "BULLISH_ENGULFING"
+        strength = (last['close'] - last['open']) / last['open']
+    # Bearish patterns
+    elif last['close'] < last['open'] and last['open'] > prev['close'] and last['close'] < prev['open']:
+        pattern = "BEARISH_ENGULFING"
+        strength = (last['open'] - last['close']) / last['open']
+    # Hammer (bullish reversal)
+    elif last['close'] > last['open'] and (last['high'] - last['close']) < (last['close'] - last['open']) and (last['open'] - last['low']) > 2 * (last['close'] - last['open']):
+        pattern = "HAMMER"
+        strength = (last['open'] - last['low']) / last['open']
+    # Shooting star (bearish reversal)
+    elif last['close'] < last['open'] and (last['close'] - last['low']) < (last['open'] - last['close']) and (last['high'] - last['open']) > 2 * (last['open'] - last['close']):
+        pattern = "SHOOTING_STAR"
+        strength = (last['high'] - last['open']) / last['open']
+    else:
+        pattern = "NEUTRAL"
+        strength = 0.0
+    
+    return pattern, strength
 
 def predict_decision(event):
-    """Advanced prediction combining sentiment, momentum, volatility, reversal, and forecast."""
+    """Improved prediction: Focus on observation trend, adjust with sentiment and patterns."""
     sentiment, sent_score = analyze_sentiment(event['title'])
     
-    all_candles = event.get('previous_candles', []) + event.get('observation_candles', [])
+    prev_candles = event.get('previous_candles', [])
+    obs_candles = event.get('observation_candles', [])
     
-    momentum = calculate_momentum(all_candles)
-    volatility = calculate_volatility(all_candles)
-    is_reversal, rev_strength = detect_reversal(event.get('observation_candles', []))
-    forecast_dir = simple_price_forecast(event.get('observation_candles', []))
+    if not obs_candles:
+        return "SHORT", 0.0  # Default if no data
     
-    score = sent_score + (momentum * 10) + forecast_dir
+    # Get trends
+    _, prev_avg_change = calculate_trend_strength(prev_candles)
+    obs_net_change, obs_avg_change = calculate_trend_strength(obs_candles)
     
+    # Detect patterns in observation
+    obs_pattern, pattern_strength = detect_patterns(obs_candles)
+    
+    # Base score from observation trend (key for short-term prediction)
+    score = (obs_net_change / obs_candles[0]['open']) * 10 + obs_avg_change * 5 + pattern_strength
+    
+    # Adjust with previous momentum
+    score += prev_avg_change * 2
+    
+    # Sentiment adjustment
     if sentiment == "POSITIVE":
-        score += 1
+        score += sent_score * 3
     elif sentiment == "NEGATIVE":
-        score -= 1
+        score -= sent_score * 3
     
-    # Adjust for reversal in positive news (common pump-dump in crypto)
-    if sentiment == "POSITIVE" and is_reversal:
-        score -= (2 + rev_strength * 5)  # Strong penalty for detected dump
+    # Reversal detection: If positive sentiment but negative obs trend, amplify SHORT
+    if sentiment == "POSITIVE" and obs_net_change < 0:
+        score -= 5 + abs(obs_net_change / obs_candles[0]['open']) * 10
+    elif sentiment == "NEGATIVE" and obs_net_change > 0:
+        score += 5 + abs(obs_net_change / obs_candles[0]['open']) * 10
     
-    # High volatility with negative momentum suggests SHORT
-    if volatility > 0.01 and momentum < 0:  # Threshold based on sample data
-        score -= 1.5
+    # Pattern adjustments
+    if "BULLISH" in obs_pattern or obs_pattern == "HAMMER":
+        score += pattern_strength * 5
+    elif "BEARISH" in obs_pattern or obs_pattern == "SHOOTING_STAR":
+        score -= pattern_strength * 5
     
-    conf = abs(score) + volatility  # Confidence includes volatility for selection
+    conf = abs(score) + sum(c['volume'] for c in obs_candles) / 50  # Confidence for selection
     
     return "LONG" if score > 0 else "SHORT", conf
 
@@ -112,20 +127,17 @@ def predict_decision(event):
 def trading_bot():
     news_events = request.get_json()
     
-    # Process events with prediction and confidence
+    # Process events
     events_with_conf = []
     for event in news_events:
-        obs_candles = event.get("observation_candles", [])
-        total_volume = sum(c['volume'] for c in obs_candles) if obs_candles else 0
         decision, conf = predict_decision(event)
-        overall_conf = conf + (total_volume / 100)  # Boost with volume
         events_with_conf.append({
             "id": event["id"],
             "decision": decision,
-            "confidence": overall_conf
+            "confidence": conf
         })
     
-    # Select top 50 by confidence (high impact events)
+    # Select top 50 by confidence (prioritize high-impact events)
     selected = sorted(events_with_conf, key=lambda x: x['confidence'], reverse=True)[:50]
     
     # Prepare output
