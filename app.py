@@ -48,6 +48,13 @@ def calculate_trend_strength(candles):
     
     return net_change, avg_change
 
+def calculate_volatility(candles):
+    """Calculate volatility as average high-low range."""
+    if not candles:
+        return 0.0
+    ranges = [(c['high'] - c['low']) / c['open'] for c in candles if c['open'] != 0]
+    return statistics.mean(ranges) if ranges else 0.0
+
 def detect_patterns(candles):
     """Detect additional candlestick patterns for better signals."""
     if len(candles) < 2:
@@ -78,50 +85,61 @@ def detect_patterns(candles):
     
     return pattern, strength
 
-def predict_decision(event):
-    """Improved prediction: Focus on observation trend, adjust with sentiment and patterns."""
-    sentiment, sent_score = analyze_sentiment(event['title'])
+def detect_reversal(observation_candles):
+    """Detect potential reversal (e.g., pump then dump)."""
+    if len(observation_candles) < 2:
+        return False, 0.0
     
+    net_change = observation_candles[-1]['close'] - observation_candles[0]['open']
+    max_high = max(c['high'] for c in observation_candles)
+    reversal_strength = (max_high - observation_candles[-1]['close']) / max_high if max_high != 0 else 0.0
+    
+    # Reversal if initial up but ends lower
+    if observation_candles[0]['close'] > observation_candles[0]['open'] and net_change < 0:
+        return True, reversal_strength
+    return False, 0.0
+
+def predict_decision(event):
+    """Ensemble-like weighted scoring for improved prediction."""
+    sentiment, sent_score = analyze_sentiment(event['title'])
     prev_candles = event.get('previous_candles', [])
     obs_candles = event.get('observation_candles', [])
     
     if not obs_candles:
-        return "SHORT", 0.0  # Default if no data
+        return "SHORT", 0.0
+
+    # Trends
+    net_change, avg_change = calculate_trend_strength(obs_candles)
+    prev_net, prev_avg = calculate_trend_strength(prev_candles)
+
+    # Patterns
+    pattern, pattern_strength = detect_patterns(obs_candles)
+
+    # Volatility
+    vol = calculate_volatility(prev_candles + obs_candles)
+
+    # Reversal
+    is_rev, rev_strength = detect_reversal(obs_candles)
+
+    # Base score components
+    score_sentiment = sent_score * (3 if sentiment == "POSITIVE" else -3 if sentiment == "NEGATIVE" else 0)
+    score_trend = (net_change / obs_candles[0]['open']) * 15 if obs_candles[0]['open'] != 0 else 0
+    score_prev_trend = prev_avg * 5
+    score_pattern = pattern_strength * (6 if pattern in ["BULLISH_ENGULFING", "HAMMER"] else -6 if pattern in ["BEARISH_ENGULFING", "SHOOTING_STAR"] else 0)
+    score_rev = -((2 + rev_strength * 5) if is_rev and sentiment == "POSITIVE" else 0)
+
+    # Compose weighted score
+    score = score_sentiment + score_trend + score_prev_trend + score_pattern + score_rev
+
+    # Volatility adjustment, large vol means more confidence
+    confidence = abs(score) + vol * 10 + sum(c['volume'] for c in obs_candles) / 100
+
+    # Clip score to avoid extreme values
+    score = max(min(score, 10), -10)
+
+    decision = "LONG" if score > 0 else "SHORT"
     
-    # Get trends
-    _, prev_avg_change = calculate_trend_strength(prev_candles)
-    obs_net_change, obs_avg_change = calculate_trend_strength(obs_candles)
-    
-    # Detect patterns in observation
-    obs_pattern, pattern_strength = detect_patterns(obs_candles)
-    
-    # Base score from observation trend (key for short-term prediction)
-    score = (obs_net_change / obs_candles[0]['open']) * 10 + obs_avg_change * 5 + pattern_strength
-    
-    # Adjust with previous momentum
-    score += prev_avg_change * 2
-    
-    # Sentiment adjustment
-    if sentiment == "POSITIVE":
-        score += sent_score * 3
-    elif sentiment == "NEGATIVE":
-        score -= sent_score * 3
-    
-    # Reversal detection: If positive sentiment but negative obs trend, amplify SHORT
-    if sentiment == "POSITIVE" and obs_net_change < 0:
-        score -= 5 + abs(obs_net_change / obs_candles[0]['open']) * 10
-    elif sentiment == "NEGATIVE" and obs_net_change > 0:
-        score += 5 + abs(obs_net_change / obs_candles[0]['open']) * 10
-    
-    # Pattern adjustments
-    if "BULLISH" in obs_pattern or obs_pattern == "HAMMER":
-        score += pattern_strength * 5
-    elif "BEARISH" in obs_pattern or obs_pattern == "SHOOTING_STAR":
-        score -= pattern_strength * 5
-    
-    conf = abs(score) + sum(c['volume'] for c in obs_candles) / 50  # Confidence for selection
-    
-    return "LONG" if score > 0 else "SHORT", conf
+    return decision, confidence
 
 @app.route('/trading-bot', methods=['POST'])
 def trading_bot():
